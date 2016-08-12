@@ -81,15 +81,16 @@ data Stoppers = Version | Help
 
 -- | Program options.
 options :: Monad m
-        => Consumer [Text] (Option Stoppers) m (Style,[Extension],Maybe FilePath)
+        => Consumer [Text] (Option Stoppers) m (Config,[Extension],Maybe FilePath)
 options = ver *> ((,,) <$> style <*> exts <*> file)
   where
-    ver = stop (flag "version" "Print the version" Version) *>
-          stop (flag "help" "Show help" Help)
+    ver =
+        stop (flag "version" "Print the version" Version) *>
+        stop (flag "help" "Show help" Help)
     style =
         makeStyle <$>
         fmap
-            (const johanTibell)
+            (const defaultConfig)
             (optional
                  (constant "--style" "Style to print with" () *>
                   anyString "STYLE")) <*>
@@ -104,9 +105,7 @@ options = ver *> ((,,) <$> style <*> exts <*> file)
             Nothing -> s
             Just len ->
                 s
-                { styleDefConfig = (styleDefConfig s)
-                  { configMaxColumns = len
-                  }
+                { configMaxColumns = len
                 }
     file = fmap (fmap T.unpack) (optional (anyString "[<filename>]"))
 

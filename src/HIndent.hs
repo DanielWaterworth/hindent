@@ -1,3 +1,4 @@
+{-# OPTIONS_GHC -fno-warn-name-shadowing #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE OverloadedStrings, TupleSections, ScopedTypeVariables #-}
 
@@ -8,38 +9,29 @@ module HIndent
    reformat
   ,prettyPrint
   ,parseMode
-  -- * Style
-  ,Style(..)
-  ,johanTibell
   -- * Testing
   ,test
   ,testFile
-  ,testAll
   ,testAst
   ,defaultExtensions
   )
   where
 
-import           HIndent.Comments
-import           HIndent.Pretty
-import           HIndent.Styles.JohanTibell (johanTibell)
-import           HIndent.Types
-
-import           Control.Applicative ((<$>))
 import           Control.Monad.State.Strict
 import           Control.Monad.Trans.Maybe
 import           Data.Function (on)
 import           Data.Functor.Identity
 import           Data.List
-import           Data.List (groupBy, intersperse)
 import           Data.Maybe (fromMaybe)
 import           Data.Monoid
-import qualified Data.Text.IO as ST
 import           Data.Text.Lazy (Text)
 import qualified Data.Text.Lazy as T hiding (singleton)
 import           Data.Text.Lazy.Builder (Builder)
 import qualified Data.Text.Lazy.Builder as T
 import qualified Data.Text.Lazy.IO as T
+import           HIndent.Comments
+import           HIndent.Pretty
+import           HIndent.Types
 import           Language.Haskell.Exts hiding (Style, prettyPrint, Pretty, style, parse)
 
 data CodeBlock = HaskellSource Text
@@ -47,8 +39,8 @@ data CodeBlock = HaskellSource Text
   deriving (Show, Eq)
 
 -- | Format the given source.
-reformat :: Style -> Maybe [Extension] -> Text -> Either String Builder
-reformat style mexts x =
+reformat :: Config -> Maybe [Extension] -> Text -> Either String Builder
+reformat config mexts x =
   mconcat . intersperse "\n" <$> mapM processBlock (cppSplitBlocks x)
   where
     processBlock :: CodeBlock -> Either String Builder
@@ -59,7 +51,7 @@ reformat style mexts x =
           code = T.unpack $ unlines' $ map (stripPrefix prefix) lines
       in case parseModuleWithComments mode' code of
         ParseOk (m, comments) ->
-          T.fromLazyText <$> addPrefix prefix <$> T.toLazyText <$> prettyPrint mode' style m comments
+          T.fromLazyText <$> addPrefix prefix <$> T.toLazyText <$> prettyPrint config mode' m comments
         ParseFailed _ e -> Left e
 
     lines' = T.split (== '\n')
@@ -151,36 +143,45 @@ cppSplitBlocks inp =
     inBlock _ dir = dir
 
 -- | Print the module.
-prettyPrint :: ParseMode
-            -> Style
+prettyPrint :: Config
+            -> ParseMode
             -> Module SrcSpanInfo
             -> [Comment]
             -> Either a Builder
-prettyPrint mode' style m comments =
+prettyPrint config mode' m comments =
   let (cs,ast) =
         annotateComments (fromMaybe m $ applyFixities baseFixities m) comments
       csComments = map comInfoComment cs
-  in case style of
-      style@(Style { styleCommentPreprocessor = preprocessor }) ->
-        Right (runPrinterStyle
-                  mode'
-                  style
-                  -- For the time being, assume that all "free-floating" comments come at the beginning.
-                  -- If they were not at the beginning, they would be after some ast node.
-                  -- Thus, print them before going for the ast.
-                  (do comments <- preprocessor (reverse csComments)
-                      mapM_ (printComment Nothing) comments
-                      pretty ast))
+  in Right (runPrinterStyle
+               config
+               mode'
+               
+               -- For the time being, assume that all "free-floating" comments come at the beginning.
+               -- If they were not at the beginning, they would be after some ast node.
+               -- Thus, print them before going for the ast.
+               (do mapM_ (printComment Nothing) csComments
+                   pretty ast))
 
 -- | Pretty print the given printable thing.
-runPrinterStyle :: ParseMode -> Style -> (forall s. Printer s ()) -> Builder
-runPrinterStyle mode' (Style _name _author _desc st extenders config preprocessor) m =
-  maybe (error "Printer failed with mzero call.")
+runPrinterStyle :: Config -> ParseMode -> Printer () -> Builder
+runPrinterStyle config mode' m =
+    maybe
+        (error "Printer failed with mzero call.")
         psOutput
         (runIdentity
-           (runMaybeT (execStateT
-                         (runPrinter m)
-                         (PrintState 0 mempty False 0 1 st extenders config False False mode' preprocessor))))
+             (runMaybeT
+                  (execStateT
+                       (runPrinter m)
+                       (PrintState
+                            0
+                            mempty
+                            False
+                            0
+                            1
+                            config
+                            False
+                            False
+                            mode'))))
 
 -- | Parse mode, includes all extensions, doesn't assume any fixities.
 parseMode :: ParseMode
@@ -193,23 +194,14 @@ parseMode =
         isDisabledExtention _ = True
 
 -- | Test the given file.
-testFile :: FilePath -> Style -> IO ()
-testFile fp style = T.readFile fp >>= test style
+testFile :: FilePath -> IO ()
+testFile fp  = T.readFile fp >>= test 
 
 -- | Test with the given style, prints to stdout.
-test :: Style -> Text -> IO ()
-test style =
+test :: Text -> IO ()
+test =
   either error (T.putStrLn . T.toLazyText) .
-  reformat style Nothing
-
--- | Test with all styles, prints to stdout.
-testAll :: Text -> IO ()
-testAll i =
-  forM_ styles
-        (\style ->
-           do ST.putStrLn ("-- " <> styleName style <> ":")
-              test style i
-              ST.putStrLn "")
+  reformat defaultConfig Nothing
 
 -- | Parse the source and annotate it with comments, yielding the resulting AST.
 testAst :: Text -> Either String ([ComInfo], Module NodeInfo)
@@ -219,11 +211,6 @@ testAst x =
     ParseOk (m,comments) ->
       Right (annotateComments m comments)
     ParseFailed _ e -> Left e
-
--- | Styles list, useful for programmatically choosing.
-styles :: [Style]
-styles =
-  [johanTibell]
 
 -- | Default extensions.
 defaultExtensions :: [Extension]

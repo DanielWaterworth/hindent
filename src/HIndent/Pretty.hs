@@ -14,10 +14,6 @@ module HIndent.Pretty
     Pretty
   , pretty
   , prettyNoExt
-  -- * User state
-  ,getState
-  ,putState
-  ,modifyState
   -- * Insertion
   , write
   , newline
@@ -62,10 +58,7 @@ module HIndent.Pretty
   )
   where
 
-import           Control.Monad.Trans.Maybe
-import           Data.Functor.Identity
 import           HIndent.Types
-
 import           Language.Haskell.Exts.Comments
 import           Control.Monad.State.Strict hiding (state)
 import           Data.Int
@@ -90,47 +83,29 @@ import           Prelude hiding (exp)
 
 -- | Pretty printing class.
 class (Annotated ast,Typeable ast) => Pretty ast where
-  prettyInternal :: forall s. ast NodeInfo -> Printer s ()
+  prettyInternal :: ast NodeInfo -> Printer ()
 
 -- | Pretty print using extenders.
 pretty :: (Pretty ast)
-       => ast NodeInfo -> Printer s ()
-pretty a =
-  do st <- get
-     case st of
-       PrintState{psExtenders = es,psUserState = s} ->
-         do
-           printComments Before a
-           depend
-             (case listToMaybe (mapMaybe (makePrinter s) es) of
-                Just (Printer m) ->
-                  modify (\s' ->
-                            fromMaybe s'
-                                      (runIdentity (runMaybeT (execStateT m s'))))
-                Nothing -> prettyNoExt a)
-             (printComments After a)
-  where makePrinter _ (Extender f) =
-          case cast a of
-            Just v -> Just (f v)
-            Nothing -> Nothing
-        makePrinter s (CatchAll f) = f s a
+       => ast NodeInfo -> Printer ()
+pretty a = do
+    printComments Before a
+    depend (prettyNoExt a) (printComments After a)
 
 -- | Run the basic printer for the given node without calling an
 -- extension hook for this node, but do allow extender hooks in child
 -- nodes. Also auto-inserts comments.
 prettyNoExt :: (Pretty ast)
-            => ast NodeInfo -> Printer s ()
+            => ast NodeInfo -> Printer ()
 prettyNoExt = prettyInternal
 
 -- | Print comments of a node.
 printComments :: (Pretty ast)
-              => ComInfoLocation -> ast NodeInfo -> Printer s ()
+              => ComInfoLocation -> ast NodeInfo -> Printer ()
 printComments loc' ast = do
-  preprocessor <- gets psCommentPreprocessor
-
   let correctLocation comment = comInfoLocation comment == Just loc'
       commentsWithLocation = filter correctLocation (nodeInfoComments info)
-  comments <- preprocessor $ map comInfoComment commentsWithLocation
+  comments <- return $ map comInfoComment commentsWithLocation
 
   forM_ comments $ \comment -> do
     -- Preceeding comments must have a newline before them.
@@ -140,9 +115,8 @@ printComments loc' ast = do
     printComment (Just $ srcInfoSpan $ nodeInfoSpan info) comment
   where info = ann ast
 
-
 -- | Pretty print a comment.
-printComment :: MonadState (PrintState s) m => Maybe SrcSpan -> Comment -> m ()
+printComment :: MonadState (PrintState) m => Maybe SrcSpan -> Comment -> m ()
 printComment mayNodespan (Comment inline cspan str) =
   do -- Insert proper amount of space before comment.
      -- This maintains alignment. This cannot force comments
@@ -167,27 +141,15 @@ printComment mayNodespan (Comment inline cspan str) =
 
 -- | Pretty print using HSE's own printer. The 'P.Pretty' class here
 -- is HSE's.
-pretty' :: (Pretty ast,P.Pretty (ast SrcSpanInfo),Functor ast,MonadState (PrintState s) m)
+pretty' :: (Pretty ast,P.Pretty (ast SrcSpanInfo),MonadState (PrintState) m)
         => ast NodeInfo -> m ()
 pretty' = write . T.fromText . T.pack . P.prettyPrint . fmap nodeInfoSpan
 
 --------------------------------------------------------------------------------
 -- * Combinators
 
--- | Get the user state.
-getState :: Printer s s
-getState = gets psUserState
-
--- | Put the user state.
-putState :: s -> Printer s ()
-putState s' = modifyState (const s')
-
--- | Modify the user state.
-modifyState :: (s -> s) -> Printer s ()
-modifyState f = modify (\s -> s {psUserState = f (psUserState s)})
-
 -- | Increase indentation level by n spaces for the given printer.
-indented :: MonadState (PrintState s) m => Int64 -> m a -> m a
+indented :: MonadState (PrintState) m => Int64 -> m a -> m a
 indented i p =
   do level <- gets psIndentLevel
      modify (\s -> s {psIndentLevel = level + i})
@@ -195,21 +157,21 @@ indented i p =
      modify (\s -> s {psIndentLevel = level})
      return m
 
-indentedBlock :: MonadState (PrintState s) m => m a -> m a
+indentedBlock :: MonadState (PrintState) m => m a -> m a
 indentedBlock p =
   do indentSpaces <- getIndentSpaces
      indented indentSpaces p
 
 -- | Print all the printers separated by spaces.
-spaced :: MonadState (PrintState s) m => [m ()] -> m ()
+spaced :: MonadState (PrintState) m => [m ()] -> m ()
 spaced = inter space
 
 -- | Print all the printers separated by commas.
-commas :: MonadState (PrintState s) m => [m ()] -> m ()
+commas :: MonadState (PrintState) m => [m ()] -> m ()
 commas = inter comma
 
 -- | Print all the printers separated by sep.
-inter :: MonadState (PrintState s) m => m () -> [m ()] -> m ()
+inter :: MonadState (PrintState) m => m () -> [m ()] -> m ()
 inter sep ps =
   foldr (\(i,p) next ->
            depend (do p
@@ -221,12 +183,12 @@ inter sep ps =
         (zip [1 ..] ps)
 
 -- | Print all the printers separated by newlines.
-lined :: MonadState (PrintState s) m => [m ()] -> m ()
+lined :: MonadState (PrintState) m => [m ()] -> m ()
 lined ps = sequence_ (intersperse newline ps)
 
 -- | Print all the printers separated newlines and optionally a line
 -- prefix.
-prefixedLined :: MonadState (PrintState s) m => Text -> [m ()] -> m ()
+prefixedLined :: MonadState (PrintState) m => Text -> [m ()] -> m ()
 prefixedLined pref ps' =
   case ps' of
     [] -> return ()
@@ -242,7 +204,7 @@ prefixedLined pref ps' =
 
 -- | Set the (newline-) indent level to the given column for the given
 -- printer.
-column :: MonadState (PrintState s) m => Int64 -> m a -> m a
+column :: MonadState (PrintState) m => Int64 -> m a -> m a
 column i p =
   do level <- gets psIndentLevel
      modify (\s -> s {psIndentLevel = i})
@@ -251,21 +213,21 @@ column i p =
      return m
 
 -- | Get the current indent level.
-getColumn :: MonadState (PrintState s) m => m Int64
+getColumn :: MonadState (PrintState) m => m Int64
 getColumn = gets psColumn
 
 -- | Get the current line number.
-getLineNum :: MonadState (PrintState s) m => m Int64
+getLineNum :: MonadState (PrintState) m => m Int64
 getLineNum = gets psLine
 
 -- | Output a newline.
-newline :: MonadState (PrintState s) m => m ()
+newline :: MonadState (PrintState) m => m ()
 newline =
   do write "\n"
      modify (\s -> s {psNewline = True})
 
 -- | Set the context to a case context, where RHS is printed with -> .
-withCaseContext :: MonadState (PrintState s) m
+withCaseContext :: MonadState (PrintState) m
                 => Bool -> m a -> m a
 withCaseContext bool pr =
   do original <- gets psInsideCase
@@ -275,7 +237,7 @@ withCaseContext bool pr =
      return result
 
 -- | Get the current RHS separator, either = or -> .
-rhsSeparator :: MonadState (PrintState s) m
+rhsSeparator :: MonadState (PrintState) m
              => m ()
 rhsSeparator =
   do inCase <- gets psInsideCase
@@ -285,7 +247,7 @@ rhsSeparator =
 
 -- | Make the latter's indentation depend upon the end column of the
 -- former.
-depend :: MonadState (PrintState s) m => m () -> m b -> m b
+depend :: MonadState (PrintState) m => m () -> m b -> m b
 depend maker dependent =
   do state' <- get
      maker
@@ -297,7 +259,7 @@ depend maker dependent =
 
 -- | Make the latter's indentation depend upon the end column of the
 -- former.
-dependBind :: MonadState (PrintState s) m => m a -> (a -> m b) -> m b
+dependBind :: MonadState (PrintState) m => m a -> (a -> m b) -> m b
 dependBind maker dependent =
   do state' <- get
      v <- maker
@@ -308,7 +270,7 @@ dependBind maker dependent =
         else (dependent v)
 
 -- | Wrap in parens.
-parens :: MonadState (PrintState s) m => m a -> m a
+parens :: MonadState (PrintState) m => m a -> m a
 parens p =
   depend (write "(")
          (do v <- p
@@ -316,7 +278,7 @@ parens p =
              return v)
 
 -- | Wrap in braces.
-braces :: MonadState (PrintState s) m => m a -> m a
+braces :: MonadState (PrintState) m => m a -> m a
 braces p =
   depend (write "{")
          (do v <- p
@@ -324,7 +286,7 @@ braces p =
              return v)
 
 -- | Wrap in brackets.
-brackets :: MonadState (PrintState s) m => m a -> m a
+brackets :: MonadState (PrintState) m => m a -> m a
 brackets p =
   depend (write "[")
          (do v <- p
@@ -332,20 +294,20 @@ brackets p =
              return v)
 
 -- | Write a space.
-space :: MonadState (PrintState s) m => m ()
+space :: MonadState (PrintState) m => m ()
 space = write " "
 
 -- | Write a comma.
-comma :: MonadState (PrintState s) m => m ()
+comma :: MonadState (PrintState) m => m ()
 comma = write ","
 
 -- | Write an integral.
-int :: (Integral n, MonadState (PrintState s) m)
+int :: (Integral n, MonadState (PrintState) m)
     => n -> m ()
 int = write . decimal
 
 -- | Write out a string, updating the current position information.
-write :: MonadState (PrintState s) m => Builder -> m ()
+write :: MonadState (PrintState) m => Builder -> m ()
 write x =
   do eol <- gets psEolComment
      when (eol && x /= "\n") newline
@@ -377,16 +339,16 @@ write x =
           LT.length (LT.filter (== '\n') x')
 
 -- | Write a string.
-string :: MonadState (PrintState s) m =>String -> m ()
+string :: MonadState (PrintState) m =>String -> m ()
 string = write . T.fromText . T.pack
 
 -- | Indent spaces, e.g. 2.
-getIndentSpaces :: MonadState (PrintState s) m => m Int64
+getIndentSpaces :: MonadState (PrintState) m => m Int64
 getIndentSpaces =
   gets (configIndentSpaces . psConfig)
 
 -- | Column limit, e.g. 80
-getColumnLimit :: MonadState (PrintState s) m => m Int64
+getColumnLimit :: MonadState (PrintState) m => m Int64
 getColumnLimit =
   gets (configMaxColumns . psConfig)
 
@@ -408,7 +370,7 @@ nullBinds (IPBinds _ x) = null x
 
 -- | Render a type with a context, or not.
 withCtx :: (Pretty ast)
-        => Maybe (ast NodeInfo) -> Printer s b -> Printer s b
+        => Maybe (ast NodeInfo) -> Printer b -> Printer b
 withCtx Nothing m = m
 withCtx (Just ctx) m =
   do pretty ctx
@@ -417,7 +379,7 @@ withCtx (Just ctx) m =
      m
 
 -- | Maybe render an overlap definition.
-maybeOverlap ::  Maybe (Overlap NodeInfo) -> Printer s ()
+maybeOverlap ::  Maybe (Overlap NodeInfo) -> Printer ()
 maybeOverlap =
   maybe (return ())
         (\p ->
@@ -425,7 +387,7 @@ maybeOverlap =
            space)
 
 -- | Swing the second printer below and indented with respect to the first.
-swing :: Printer s () -> Printer s b -> Printer s b
+swing :: Printer () -> Printer b -> Printer b
 swing a b =
   do orig <- gets psIndentLevel
      a
@@ -435,7 +397,7 @@ swing a b =
 
 -- | Swing the second printer below and indented with respect to the first by
 -- the specified amount.
-swingBy :: Int64 -> Printer s() -> Printer s b -> Printer s b
+swingBy :: Int64 -> Printer() -> Printer b -> Printer b
 swingBy i a b =
   do orig <- gets psIndentLevel
      a
@@ -524,7 +486,7 @@ instance Pretty Pat where
       PVar{} -> pretty' x
 
 -- | Pretty print a name for being an infix operator.
-prettyInfixOp ::  QName NodeInfo -> Printer s ()
+prettyInfixOp ::  QName NodeInfo -> Printer ()
 prettyInfixOp x =
   case x of
     Qual _ mn n ->
@@ -545,7 +507,7 @@ instance Pretty Exp where
   prettyInternal = exp'
 
 -- | Render an expression.
-exp :: Exp NodeInfo -> Printer s ()
+exp :: Exp NodeInfo -> Printer ()
 exp (OverloadedLabel _ _) = error "FIXME: No implementation for OverloadedLabel"
 exp (TypeApp _ _) = error "FIXME: No implementation for TypeApp"
 exp (ExprHole {}) = write "_"
@@ -738,10 +700,10 @@ instance Pretty QualStmt where
         error "FIXME: No implementation for GroupByUsing."
 
 instance Pretty Decl where
-  prettyInternal = decl
+  prettyInternal = decl'
 
 -- | Render a declaration.
-decl ::  Decl NodeInfo -> Printer s ()
+decl ::  Decl NodeInfo -> Printer ()
 decl (PatBind _ pat rhs' mbinds) =
   do pretty pat
      withCaseContext False (pretty rhs')
@@ -921,20 +883,7 @@ instance Pretty ClassDecl where
 
 instance Pretty ConDecl where
   prettyInternal x =
-    case x of
-      ConDecl _ name bangty ->
-        depend (do pretty name
-                   space)
-               (lined (map pretty bangty))
-      InfixConDecl l a f b ->
-        pretty (ConDecl l f [a,b])
-      RecDecl _ name fields ->
-        depend (do pretty name
-                   write " ")
-               (do depend (write "{")
-                          (prefixedLined ","
-                                         (map pretty fields))
-                   write "}")
+    conDecl x
 
 instance Pretty FieldDecl where
   prettyInternal (FieldDecl _ names ty) =
@@ -1269,7 +1218,7 @@ instance Pretty ExportSpec where
 -- do x *
 --    y
 -- is two invalid statements, not one valid infix op.
-stmt :: Stmt NodeInfo -> Printer s ()
+stmt :: Stmt NodeInfo -> Printer ()
 stmt (Qualifier _ e@(InfixApp _ a op b)) =
   do col <- fmap (psColumn . snd)
                  (sandbox (write ""))
@@ -1296,10 +1245,10 @@ stmt x = case x of
 
 -- | Make the right hand side dependent if it fits on one line,
 -- otherwise send it to the next line.
-dependOrNewline :: Printer t ()
+dependOrNewline :: Printer ()
                 -> Exp NodeInfo
-                -> (Exp NodeInfo -> Printer t ())
-                -> Printer t ()
+                -> (Exp NodeInfo -> Printer ())
+                -> Printer ()
 dependOrNewline left right f =
   do (fits,st) <- fitsOnOneLine renderDependent
      if fits
@@ -1310,7 +1259,7 @@ dependOrNewline left right f =
   where renderDependent = depend left (f right)
 
 -- | Handle do and case specially and also space out guards more.
-rhs :: Rhs NodeInfo -> Printer s ()
+rhs :: Rhs NodeInfo -> Printer ()
 rhs (UnGuardedRhs _ (Do _ dos)) =
   do inCase <- gets psInsideCase
      write (if inCase then " -> " else " = ")
@@ -1340,7 +1289,7 @@ rhs (GuardedRhss _ gas) =
                           gas))
 
 -- | Implement dangling right-hand-sides.
-guardedRhs :: GuardedRhs NodeInfo -> Printer s ()
+guardedRhs :: GuardedRhs NodeInfo -> Printer ()
 -- | Handle do specially.
 
 guardedRhs (GuardedRhs _ stmts (Do _ dos)) =
@@ -1383,7 +1332,7 @@ guardedRhs (GuardedRhs _ stmts e) =
 
 
 -- | Expression customizations.
-exp' :: Exp NodeInfo -> Printer s ()
+exp' :: Exp NodeInfo -> Printer ()
 -- | Do after lambda should swing.
 exp' (Lambda _ pats (Do l stmts)) =
   do
@@ -1499,7 +1448,7 @@ exp' (ListComp _ e qstmt) =
                                              qstmt)))
 exp' e = exp e
 
-match :: Match NodeInfo -> Printer s ()
+match :: Match NodeInfo -> Printer ()
 match (Match _ name pats rhs' mbinds) =
   do depend (do pretty name
                 space)
@@ -1519,7 +1468,7 @@ match (InfixMatch _ pat1 name pats rhs' mbinds) =
      forM_ mbinds bindingGroup
 
 -- | Format contexts with spaces and commas between class constraints.
-context :: Context NodeInfo -> Printer s ()
+context :: Context NodeInfo -> Printer ()
 context ctx@(CxTuple _ asserts) =
   do (fits,st) <-
        fitsOnOneLine
@@ -1535,14 +1484,14 @@ context ctx = case ctx of
                                         (map pretty as))
                 CxEmpty _ -> parens (return ())
 
-unboxParens :: MonadState (PrintState s) m => m a -> m a
+unboxParens :: MonadState (PrintState) m => m a -> m a
 unboxParens p =
   depend (write "(# ")
          (do v <- p
              write " #)"
              return v)
 
-typ :: Type NodeInfo -> Printer s ()
+typ :: Type NodeInfo -> Printer ()
 typ (TyTuple _ Boxed types) = parens $ inter (write ", ") $ map pretty types
 typ (TyTuple _ Unboxed types) = unboxParens $ inter (write ", ") $ map pretty types
 typ x = case x of
@@ -1604,7 +1553,7 @@ typ x = case x of
           _ -> error ("FIXME: No implementation for " ++ show x)
 
 -- | Specially format records. Indent where clauses only 2 spaces.
-decl' :: Decl NodeInfo -> Printer s ()
+decl' :: Decl NodeInfo -> Printer ()
 -- | Pretty print type signatures like
 --
 -- foo :: (Show x, Read x)
@@ -1678,10 +1627,10 @@ decl' (DataDecl _ dataornew ctx dhead condecls@[_] mderivs)
           depend (write " =")
                  (inter (write "|")
                         (map (depend space . qualConDecl) xs))
-decl' e = prettyNoExt e
+decl' e = decl e
 
 -- | Use special record display, used by 'dataDecl' in a record scenario.
-qualConDecl :: QualConDecl NodeInfo -> Printer s ()
+qualConDecl :: QualConDecl NodeInfo -> Printer ()
 qualConDecl x =
   case x of
     QualConDecl _ tyvars ctx d ->
@@ -1692,7 +1641,7 @@ qualConDecl x =
              (withCtx ctx (recDecl d))
 
 -- | Fields are preceded with a space.
-conDecl :: ConDecl NodeInfo -> Printer s ()
+conDecl :: ConDecl NodeInfo -> Printer ()
 conDecl (RecDecl _ name fields) =
   depend (do pretty name
              write " ")
@@ -1700,12 +1649,25 @@ conDecl (RecDecl _ name fields) =
                     (prefixedLined ","
                                    (map (depend space . pretty) fields))
              write "}")
-conDecl e = prettyNoExt e
+conDecl x = case x of
+              ConDecl _ name bangty ->
+                depend (do pretty name
+                           space)
+                       (lined (map pretty bangty))
+              InfixConDecl l a f b ->
+                pretty (ConDecl l f [a,b])
+              RecDecl _ name fields ->
+                depend (do pretty name
+                           write " ")
+                       (do depend (write "{")
+                                  (prefixedLined ","
+                                                 (map pretty fields))
+                           write "}")
 
 -- | Record decls are formatted like: Foo
 -- { bar :: X
 -- }
-recDecl :: ConDecl NodeInfo -> Printer s ()
+recDecl :: ConDecl NodeInfo -> Printer ()
 recDecl (RecDecl _ name fields) =
   do pretty name
      indentSpaces <- getIndentSpaces
@@ -1718,7 +1680,7 @@ recDecl (RecDecl _ name fields) =
                 write "} ")
 recDecl r = prettyNoExt r
 
-recUpdateExpr :: Printer s () -> [FieldUpdate NodeInfo] -> Printer s ()
+recUpdateExpr :: Printer () -> [FieldUpdate NodeInfo] -> Printer ()
 recUpdateExpr expWriter updates = do
   expWriter
   newline
@@ -1739,14 +1701,14 @@ isRecord (QualConDecl _ _ _ RecDecl{}) = True
 isRecord _ = False
 
 -- | Does printing the given thing overflow column limit? (e.g. 80)
-isOverflow :: MonadState (PrintState s) m => m a -> m Bool
+isOverflow :: MonadState (PrintState) m => m a -> m Bool
 isOverflow p =
   do (_,st) <- sandbox p
      columnLimit <- getColumnLimit
      return (psColumn st > columnLimit)
 
 -- | Does printing the given thing overflow column limit? (e.g. 80)
-fitsOnOneLine :: MonadState (PrintState s) m => m a -> m (Bool,PrintState s)
+fitsOnOneLine :: MonadState (PrintState) m => m a -> m (Bool,PrintState)
 fitsOnOneLine p =
   do line <- gets psLine
      (_,st) <- sandbox p
@@ -1754,57 +1716,20 @@ fitsOnOneLine p =
      return (psLine st == line && psColumn st < columnLimit,st)
 
 -- | Is the given expression a single-liner when printed?
-isSingleLiner :: MonadState (PrintState s) m
+isSingleLiner :: MonadState (PrintState) m
               => m a -> m Bool
 isSingleLiner p =
   do line <- gets psLine
      (_,st) <- sandbox p
      return (psLine st == line)
 
--- | Is the expression "short"? Used for app heads.
-isShort :: (Pretty ast)
-        => ast NodeInfo -> Printer s (Bool)
-isShort p =
-  do line <- gets psLine
-     orig <- fmap (psColumn . snd) (sandbox (write ""))
-     (_,st) <- sandbox (pretty p)
-     return (psLine st == line &&
-             (psColumn st < orig + shortName))
-
--- | Is an expression flat?
-isFlat :: Exp NodeInfo -> Printer s Bool
-isFlat (Lambda _ _ e) = isFlat e
-isFlat (App _ a b) =
-  return (isName a && isName b)
-  where isName (Var{}) = True
-        isName _ = False
-isFlat (NegApp _ a) = isFlat a
-isFlat VarQuote{} = return True
-isFlat TypQuote{} = return True
-isFlat (List _ []) = return True
-isFlat Var{} = return True
-isFlat Lit{} = return True
-isFlat Con{} = return True
-isFlat (LeftSection _ e _) = isFlat e
-isFlat (RightSection _ _ e) = isFlat e
-isFlat _ = return False
-
--- | rhs on field update on the same line as lhs.
-fieldupdate :: FieldUpdate NodeInfo -> Printer s ()
-fieldupdate e =
-  case e of
-    FieldUpdate _ n e' -> do pretty n
-                             write " = "
-                             pretty e'
-    _ -> prettyNoExt e
-
-isSmall :: MonadState (PrintState t) m => m a -> m Bool
+isSmall :: MonadState PrintState m => m a -> m Bool
 isSmall p =
   do overflows <- isOverflow p
      oneLine <- isSingleLiner p
      return (not overflows && oneLine)
 
-bindingGroup :: Binds NodeInfo -> Printer s ()
+bindingGroup :: Binds NodeInfo -> Printer ()
 bindingGroup binds =
   do newline
      indented 2
@@ -1817,7 +1742,7 @@ infixApp :: Exp NodeInfo
          -> QOp NodeInfo
          -> Exp NodeInfo
          -> Maybe Int64
-         -> Printer s ()
+         -> Printer ()
 infixApp e a op b indent =
   do (fits,st) <-
        fitsOnOneLine
@@ -1858,7 +1783,3 @@ flattenOpChain (InfixApp _ left op right) =
   [OpChainLink op] <>
   flattenOpChain right
 flattenOpChain e = [OpChainExp e]
-
--- | A short function name.
-shortName :: Int64
-shortName = 10

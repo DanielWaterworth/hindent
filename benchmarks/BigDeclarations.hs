@@ -15,3 +15,37 @@ listPrinters =
                           _ ->
                             ListPresentation typeString
                                              (map (snd $(presentVar)) xs)))|]))]
+printComments loc' ast = do
+  let correctLocation comment = comInfoLocation comment == Just loc'
+      commentsWithLocation = filter correctLocation (nodeInfoComments info)
+  comments <- return $ map comInfoComment commentsWithLocation
+
+  forM_ comments $ \comment -> do
+    -- Preceeding comments must have a newline before them.
+    hasNewline <- gets psNewline
+    when (not hasNewline && loc' == Before) newline
+
+    printComment (Just $ srcInfoSpan $ nodeInfoSpan info) comment
+  where info = ann ast
+exp' (App _ op a) =
+  do (fits,st) <-
+       fitsOnOneLine (spaced (map pretty (f : args)))
+     if fits
+        then put st
+        else do pretty f
+                newline
+                spaces <- getIndentSpaces
+                indented spaces (lined (map pretty args))
+  where (f,args) = flatten op [a]
+        flatten :: Exp NodeInfo
+                -> [Exp NodeInfo]
+                -> (Exp NodeInfo,[Exp NodeInfo])
+        flatten (App _ f' a') b =
+          flatten f' (a' : b)
+        flatten f' as = (f',as)
+infixApp :: Exp NodeInfo
+         -> Exp NodeInfo
+         -> QOp NodeInfo
+         -> Exp NodeInfo
+         -> Maybe Int64
+         -> Printer ()

@@ -24,7 +24,7 @@ import Control.Monad.Trans.Maybe
 import Data.Data
 import Data.Functor.Identity
 import Data.Int (Int64)
-import Data.Text.Lazy.Builder (Builder)
+import Data.ByteString.Builder
 import Language.Haskell.Exts.Comments
 import Language.Haskell.Exts.Parser
 import Language.Haskell.Exts.SrcLoc

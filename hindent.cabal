@@ -37,8 +37,10 @@ library
                    , haskell-src-exts >= 1.18
                    , monad-loops
                    , mtl
-                   , text
+                   , bytestring
+                   , utf8-string
                    , transformers
+
 
 executable hindent
   hs-source-dirs:    src/main
@@ -46,11 +48,13 @@ executable hindent
   main-is:           Main.hs
   build-depends:     base >= 4 && < 5
                    , hindent
-                   , text
+                   , bytestring
+                   , utf8-string
                    , descriptive >= 0.7 && < 0.10
                    , haskell-src-exts
                    , ghc-prim
                    , directory
+                   , text
 
 test-suite hindent-test
   type: exitcode-stdio-1.0
@@ -61,7 +65,8 @@ test-suite hindent-test
                    , haskell-src-exts
                    , monad-loops
                    , mtl
-                   , text
+                   , bytestring
+                   , utf8-string
                    , hspec
                    , directory
 
@@ -72,7 +77,8 @@ benchmark hindent-bench
   main-is:           Benchmark.hs
   build-depends:     base >= 4 && < 5
                    , hindent
-                   , text
+                   , bytestring
+                   , utf8-string
                    , haskell-src-exts
                    , ghc-prim
                    , directory

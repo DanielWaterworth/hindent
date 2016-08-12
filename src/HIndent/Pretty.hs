@@ -58,24 +58,19 @@ module HIndent.Pretty
   )
   where
 
-import           HIndent.Types
-import           Language.Haskell.Exts.Comments
 import           Control.Monad.State.Strict hiding (state)
+import qualified Data.ByteString.Builder as S
+import           Data.Foldable (traverse_)
 import           Data.Int
 import           Data.List
 import           Data.Maybe
-import           Data.Foldable (traverse_)
 import           Data.Monoid hiding (Alt)
-import           Data.Text (Text)
-import qualified Data.Text as T
-import qualified Data.Text.Lazy as LT
-import           Data.Text.Lazy.Builder (Builder)
-import qualified Data.Text.Lazy.Builder as T
-import           Data.Text.Lazy.Builder.Int
 import           Data.Typeable
+import           HIndent.Types
 import qualified Language.Haskell.Exts as P
-import           Language.Haskell.Exts.Syntax
+import           Language.Haskell.Exts.Comments
 import           Language.Haskell.Exts.SrcLoc
+import           Language.Haskell.Exts.Syntax
 import           Prelude hiding (exp)
 
 --------------------------------------------------------------------------------
@@ -143,7 +138,7 @@ printComment mayNodespan (Comment inline cspan str) =
 -- is HSE's.
 pretty' :: (Pretty ast,P.Pretty (ast SrcSpanInfo),MonadState (PrintState) m)
         => ast NodeInfo -> m ()
-pretty' = write . T.fromText . T.pack . P.prettyPrint . fmap nodeInfoSpan
+pretty' = write . P.prettyPrint . fmap nodeInfoSpan
 
 --------------------------------------------------------------------------------
 -- * Combinators
@@ -188,18 +183,18 @@ lined ps = sequence_ (intersperse newline ps)
 
 -- | Print all the printers separated newlines and optionally a line
 -- prefix.
-prefixedLined :: MonadState (PrintState) m => Text -> [m ()] -> m ()
+prefixedLined :: MonadState (PrintState) m => String -> [m ()] -> m ()
 prefixedLined pref ps' =
   case ps' of
     [] -> return ()
     (p:ps) ->
       do p
          indented (fromIntegral
-                     (T.length pref *
+                     (length pref *
                       (-1)))
                   (mapM_ (\p' ->
                             do newline
-                               depend (write (T.fromText pref)) p')
+                               depend (write pref) p')
                          ps)
 
 -- | Set the (newline-) indent level to the given column for the given
@@ -302,12 +297,12 @@ comma :: MonadState (PrintState) m => m ()
 comma = write ","
 
 -- | Write an integral.
-int :: (Integral n, MonadState (PrintState) m)
-    => n -> m ()
-int = write . decimal
+int :: (MonadState (PrintState) m)
+    => Integer -> m ()
+int = write . show
 
 -- | Write out a string, updating the current position information.
-write :: MonadState (PrintState) m => Builder -> m ()
+write :: MonadState (PrintState) m => String -> m ()
 write x =
   do eol <- gets psEolComment
      when (eol && x /= "\n") newline
@@ -315,32 +310,30 @@ write x =
      let clearEmpty =
            configClearEmptyLines (psConfig state)
          writingNewline = x == "\n"
+         out :: String
          out =
            if psNewline state &&
               not (clearEmpty && writingNewline)
-              then T.fromText
-                     (T.replicate (fromIntegral (psIndentLevel state))
-                                  " ") <>
+              then (replicate (fromIntegral (psIndentLevel state))
+                               ' ') <>
                    x
               else x
-         out' = T.toLazyText out
      modify (\s ->
-               s {psOutput = psOutput state <> out
+               s {psOutput = psOutput state <> S.stringUtf8 out
                  ,psNewline = False
                  ,psEolComment = False
-                 ,psLine = psLine state + additionalLines
+                 ,psLine = psLine state + fromIntegral additionalLines
                  ,psColumn =
                     if additionalLines > 0
-                       then LT.length (LT.concat (take 1 (reverse srclines)))
-                       else psColumn state + LT.length out'})
-  where x' = T.toLazyText x
-        srclines = LT.lines x'
+                       then fromIntegral (length (concat (take 1 (reverse srclines))))
+                       else psColumn state + fromIntegral (length out)})
+  where srclines = lines x
         additionalLines =
-          LT.length (LT.filter (== '\n') x')
+          length (filter (== '\n') x)
 
 -- | Write a string.
-string :: MonadState (PrintState) m =>String -> m ()
-string = write . T.fromText . T.pack
+string :: MonadState (PrintState) m => String -> m ()
+string = write
 
 -- | Indent spaces, e.g. 2.
 getIndentSpaces :: MonadState (PrintState) m => m Int64
@@ -1192,7 +1185,7 @@ instance Pretty ImportDecl where
 
 instance Pretty ModuleName where
   prettyInternal (ModuleName _ name) =
-    write (T.fromString name)
+    write name
 
 instance Pretty ImportSpecList where
   prettyInternal = pretty'

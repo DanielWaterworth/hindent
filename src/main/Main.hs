@@ -10,7 +10,15 @@ module Main where
 
 import           HIndent
 import           HIndent.Types
-
+import           Data.ByteString (ByteString)
+import qualified Data.ByteString as S
+import           Data.ByteString.Builder (Builder)
+import qualified Data.ByteString.UTF8 as UTF8
+import qualified Data.ByteString.Builder as S
+import qualified Data.ByteString.Char8 as S8
+import qualified Data.ByteString.Internal as S
+import qualified Data.ByteString.Lazy.Char8 as L8
+import qualified Data.ByteString.Unsafe as S
 import           Control.Applicative
 import           Data.List
 import           Data.Text (Text)
@@ -39,15 +47,14 @@ main = do
         Succeeded (style,exts,mfilepath) ->
             case mfilepath of
                 Just filepath -> do
-                    text <- T.readFile filepath
+                    text <- S.readFile filepath
                     tmpDir <- getTemporaryDirectory
                     (fp,h) <- openTempFile tmpDir "hindent.hs"
-                    T.hPutStrLn
-                        h
-                        (either
-                             error
-                             T.toLazyText
-                             (reformat style (Just exts) text))
+                    L8.putStrLn
+                                   (either
+                                        error
+                                        S.toLazyByteString
+                                        (reformat style (Just exts) text))
                     hFlush h
                     hClose h
                     let exdev e =
@@ -60,8 +67,8 @@ main = do
                                 else throw e
                     renameFile fp filepath `catch` exdev
                 Nothing ->
-                    T.interact
-                        (either error T.toLazyText . reformat style (Just exts))
+                    L8.interact
+                           (either error S.toLazyByteString . reformat style (Just exts) . L8.toStrict)
         Failed (Wrap (Stopped Version) _) ->
             putStrLn ("hindent " ++ showVersion version)
         Failed (Wrap (Stopped Help) _) -> putStrLn help

@@ -7,9 +7,9 @@ module Main where
 import           Control.DeepSeq
 import           Criterion
 import           Criterion.Main
-import           Data.Text.Lazy (Text)
-import qualified Data.Text.Lazy.IO as LT
-import qualified Data.Text.Lazy.Builder as T
+import           Data.ByteString (ByteString)
+import qualified Data.ByteString as S
+import qualified Data.ByteString.Builder as S
 import           HIndent
 import           HIndent.Types
 
@@ -27,15 +27,15 @@ main =
                               [ bench
                                     "HIndent.reformat"
                                     (nf
-                                         (either error T.toLazyText .
+                                         (either error S.toLazyByteString .
                                           reformat
                                               HIndent.Types.defaultConfig
                                               (Just defaultExtensions))
                                          bigDecls)]])]
 
 -- | Setup the environment for the benchmarks.
-setupEnv :: IO Text
+setupEnv :: IO ByteString
 setupEnv = do
-  bigDecls <- LT.readFile "benchmarks/BigDeclarations.hs"
+  bigDecls <- S.readFile "benchmarks/BigDeclarations.hs"
   let !decls = force bigDecls
   return decls
